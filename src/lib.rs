@@ -6,19 +6,20 @@ mod schema_table;
 mod serial_value;
 pub mod sql_parser;
 
-use anyhow::{Context, Ok, Result};
-use btree_page::BTreePage;
-use btree_page::PageType;
+use anyhow::{bail, Ok, Result};
+use btree_page::{BTreePage, PageType};
 use cell::TableLeafCell;
 use database_file_header::DatabaseFileHeader;
 use reader_utils::ReadeInto;
 use schema_table::SchemaTable;
+use sql_parser::{CreateIndexStmt, WhereClause};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
 use std::os::unix::fs::FileExt;
 
 pub struct SQLiteDB {
+    #[allow(unused)]
     header: DatabaseFileHeader,
     database_path: String,
     page_size: u16,
@@ -91,6 +92,15 @@ impl SQLiteDB {
             .find(|&x| &x.tbl_name == &table_name)
     }
 
+    pub fn get_index(&self, table_name: &str, column: &str) -> Option<&SchemaTable> {
+        self.tables.iter().find(|&x| match &x.object_type {
+            schema_table::ObjectType::Index(CreateIndexStmt {
+                on, indexed_column, ..
+            }) => on == table_name && indexed_column[0] == column,
+            _ => false,
+        })
+    }
+
     pub fn get_page_size(&self) -> u16 {
         self.page_size
     }
@@ -98,12 +108,27 @@ impl SQLiteDB {
     pub fn get_table_rows(
         &self,
         table: &SchemaTable,
-        filter: Option<&impl Fn(&TableLeafCell) -> bool>,
+        where_clause: Option<&WhereClause>,
     ) -> Result<Vec<TableLeafCell>> {
         assert!(
             table.rootpage.is_some(),
             "Can't get rows from a table without rootpage"
         );
+
+        let column_def = table.get_table_column_def()?;
+        let row_filter = match where_clause.as_ref() {
+            Some(WhereClause { column, value }) => {
+                let column_idx = match column_def.iter().position(|x| x == column) {
+                    Some(column_idx) => column_idx,
+                    None => bail!("Where condition column {} doesn't exist", column),
+                };
+                Some(move |row: &TableLeafCell| {
+                    format!("{}", row.columns[column_idx]) == value.as_str()
+                })
+            }
+            None => None,
+        };
+
         let mut rows = vec![];
         let mut pages = vec![table.rootpage.unwrap()];
         while pages.len() > 0 {
@@ -114,12 +139,9 @@ impl SQLiteDB {
                     PageType::InteriorTableBTreePage => {
                         next_pages.append(&mut btree_page.get_child_pages()?);
                     }
-                    PageType::LeafTableBTreePage => match filter {
-                        Some(f) => {
-                            rows.append(&mut btree_page.get_rows()?.into_iter().filter(f).collect())
-                        }
-                        None => rows.append(&mut btree_page.get_rows()?),
-                    },
+                    PageType::LeafTableBTreePage => {
+                        rows.append(&mut btree_page.get_rows(row_filter.as_ref())?)
+                    }
                     PageType::LeafIndexBTreePage => unreachable!(),
                     PageType::InteriorIndexBTreePage => unreachable!(),
                 }

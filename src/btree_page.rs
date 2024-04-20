@@ -66,7 +66,10 @@ impl BTreePage {
         Ok(tables)
     }
 
-    pub fn get_rows(&self) -> Result<Vec<TableLeafCell>> {
+    pub fn get_rows(
+        &self,
+        row_filter: Option<&impl Fn(&TableLeafCell) -> bool>,
+    ) -> Result<Vec<TableLeafCell>> {
         assert_eq!(
             self.page_type,
             PageType::LeafTableBTreePage,
@@ -76,7 +79,14 @@ impl BTreePage {
         let mut rows = vec![];
         for i in 0..self.cell_pointers.len() {
             let cell = &self.data[self.cell_pointers[i] as usize..];
-            rows.push(TableLeafCell::parse(cell)?);
+            let row = TableLeafCell::parse(cell)?;
+            match row_filter {
+                Some(f) => match f(&row) {
+                    true => rows.push(row),
+                    false => (),
+                },
+                None => rows.push(row),
+            }
         }
         Ok(rows)
     }
