@@ -72,7 +72,7 @@ fn main() -> Result<()> {
                         let mut output = vec![];
                         for column_idx in selected_columns.iter() {
                             match column_idx {
-                                0 => output.push(row.id.to_string()),
+                                0 => output.push(row.row_id.to_string()),
                                 _ => output.push(format!("{}", row.columns[*column_idx])),
                             }
                         }
